@@ -1,0 +1,12 @@
+const test=require('node:test');const a=require('node:assert/strict');const {diff,valid,validHistory}=require('../server.cjs');
+const s=()=>({time:'2026-10-10T00:00:00Z',drives:[{id:'C:',total:500*1024**3,free:70*1024**3}],usb:[{id:'a',name:'A',version:'USB'}],software:[{id:'s',name:'App',version:'1'}],warnings:[]});
+test('baseline does not invent past',()=>{a.equal(diff(null,s()).length,1);});
+test('no differences no events',()=>a.deepEqual(diff(s(),s()),[]));
+test('USB addition and removal',()=>{const n=s();n.usb=[{id:'b',name:'B'}];a.equal(diff(s(),n).length,2);});
+test('software version update',()=>{const n=s();n.software[0].version='2';a.equal(diff(s(),n)[0].type,'software');});
+test('ignore small capacity changes',()=>{const n=s();n.drives[0].free-=1024;a.equal(diff(s(),n).length,0);});
+test('record large capacity changes',()=>{const n=s();n.drives[0].free-=1024**3;a.equal(diff(s(),n)[0].type,'disk');});
+test('failed sample never removes all devices',()=>{const n=s();n.usb=[];n.warnings=['usb'];a.equal(diff(s(),n).length,0);a.equal(diff(n,s()).length,0);});
+test('reject malformed capacity',()=>{a.ok(valid(s()));const n=s();n.drives[0].free='bad';a.equal(valid(n),false);});
+test('reject null device and unsupported warning',()=>{const n=s();n.usb=[null];a.equal(valid(n),false);n.usb=[];n.warnings=[{}];a.equal(valid(n),false);});
+test('reject malformed persisted history',()=>{a.ok(validHistory({snapshot:s(),events:[],paused:false}));a.equal(validHistory({snapshot:s(),events:[null],paused:false}),false);});

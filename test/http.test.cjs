@@ -1,0 +1,23 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const http=require('node:http');
+const {start}=require('../server.cjs');
+test('local service rejects spoofed host and cross-origin changes',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-timeline-test-'));
+  const server=start({port:0,dataDir:dir,autoCollect:false});
+  await new Promise(resolve=>server.once('listening',resolve));
+  t.after(async()=>{await new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();});fs.rmSync(dir,{recursive:true,force:true});});
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(origin+'/api/state')).status,200);
+  const spoofedStatus=await new Promise((resolve,reject)=>{const req=http.get(origin+'/api/state',{headers:{Host:'evil.example'}},res=>{res.resume();resolve(res.statusCode);});req.on('error',reject);});
+  assert.equal(spoofedStatus,403);
+  assert.equal((await fetch(origin+'/api/pause',{method:'POST',headers:{Origin:'https://evil.example','X-Timeline-Request':'1'}})).status,403);
+  assert.equal((await fetch(origin+'/api/pause',{method:'POST',headers:{Origin:origin}})).status,403);
+  const r=await fetch(origin+'/api/pause',{method:'POST',headers:{Origin:origin,'X-Timeline-Request':'1'}});
+  assert.equal(r.status,200);assert.equal((await r.json()).paused,true);
+  assert.equal((await fetch(origin+'/../server.cjs')).status,404);
+  const html=await fetch(origin);assert.ok(html.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
+});

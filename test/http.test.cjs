@@ -7,7 +7,7 @@ const http=require('node:http');
 const {start}=require('../server.cjs');
 test('local service rejects spoofed host and cross-origin changes',async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-timeline-test-'));
-  const server=start({port:0,dataDir:dir,autoCollect:false});
+  const server=start({port:0,dataDir:dir,autoCollect:false,quiet:true});
   await new Promise(resolve=>server.once('listening',resolve));
   t.after(async()=>{await new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();});fs.rmSync(dir,{recursive:true,force:true});});
   const origin=`http://127.0.0.1:${server.address().port}`;
@@ -20,4 +20,23 @@ test('local service rejects spoofed host and cross-origin changes',async t=>{
   assert.equal(r.status,200);assert.equal((await r.json()).paused,true);
   assert.equal((await fetch(origin+'/../server.cjs')).status,404);
   const html=await fetch(origin);assert.ok(html.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
+  const headers={Origin:origin,'X-Timeline-Request':'1','Content-Type':'application/json'};
+  assert.equal((await fetch(origin+'/api/settings',{method:'POST',headers,body:'{broken'})).status,400);
+  assert.equal((await fetch(origin+'/api/settings',{method:'POST',headers,body:'x'.repeat(9000)})).status,413);
+  assert.equal((await fetch(origin+'/api/settings',{method:'POST',headers,body:JSON.stringify({intervalSeconds:1,diskThresholdMiB:256})})).status,400);
+  assert.equal((await fetch(origin+'/api/settings',{method:'POST',headers,body:JSON.stringify({intervalSeconds:120,diskThresholdMiB:128})})).status,200);
+  const state=await(await fetch(origin+'/api/state')).json();assert.equal(state.settings.intervalSeconds,120);assert.equal(state.paused,true);
+  assert.equal((await fetch(origin+'/vendor/lucide.min.js')).status,200);
+});
+test('collector errors preserve last snapshot and successful samples',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-timeline-collect-'));
+  let fail=false;
+  const snapshot={time:new Date().toISOString(),drives:[{id:'C:',total:10,free:5}],usb:[],software:[],warnings:[]};
+  const server=start({port:0,dataDir:dir,autoCollect:false,quiet:true,collector:async()=>{if(fail)throw Error('private path');return snapshot;}});
+  await new Promise(resolve=>server.once('listening',resolve));
+  t.after(async()=>{await new Promise(resolve=>{server.close(resolve);server.closeIdleConnections();});fs.rmSync(dir,{recursive:true,force:true});});
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  const refresh=async()=>{await fetch(origin+'/api/refresh',{method:'POST',headers:{Origin:origin,'X-Timeline-Request':'1'}});return (await(await fetch(origin+'/api/state')).json());};
+  const first=await refresh();assert.equal(first.samples.length,1);fail=true;
+  const second=await refresh();assert.equal(second.samples.length,1);assert.deepEqual(second.snapshot,first.snapshot);assert.ok(second.error);assert.ok(!second.error.includes('private path'));
 });

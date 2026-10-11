@@ -1,4 +1,4 @@
-const test=require('node:test');const a=require('node:assert/strict');const {diff,valid,validHistory}=require('../server.cjs');
+const test=require('node:test');const a=require('node:assert/strict');const {diff,valid,validHistory,migrate,validSettings}=require('../server.cjs');
 const s=()=>({time:'2026-10-10T00:00:00Z',drives:[{id:'C:',total:500*1024**3,free:70*1024**3}],usb:[{id:'a',name:'A',version:'USB'}],software:[{id:'s',name:'App',version:'1'}],warnings:[]});
 test('baseline does not invent past',()=>{a.equal(diff(null,s()).length,1);});
 test('no differences no events',()=>a.deepEqual(diff(s(),s()),[]));
@@ -10,3 +10,8 @@ test('failed sample never removes all devices',()=>{const n=s();n.usb=[];n.warni
 test('reject malformed capacity',()=>{a.ok(valid(s()));const n=s();n.drives[0].free='bad';a.equal(valid(n),false);});
 test('reject null device and unsupported warning',()=>{const n=s();n.usb=[null];a.equal(valid(n),false);n.usb=[];n.warnings=[{}];a.equal(valid(n),false);});
 test('reject malformed persisted history',()=>{a.ok(validHistory({snapshot:s(),events:[],paused:false}));a.equal(validHistory({snapshot:s(),events:[null],paused:false}),false);});
+test('migration preserves old events without inventing comparisons or samples',()=>{const events=[{type:'usb',title:'A',detail:'B',time:s().time}];const db=migrate({snapshot:s(),events,paused:true});a.equal(db.events[0].title,'A');a.ok(db.events[0].id);a.deepEqual(db.events[0].comparison,[]);a.deepEqual(db.samples,[]);a.equal(db.paused,true);a.equal(db.settings.intervalSeconds,60);});
+test('structured disk comparison carries exact before and after bytes',()=>{const n=s();n.drives[0].free-=1024**3;const c=diff(s(),n)[0].comparison[0];a.equal(c.before,s().drives[0].free);a.equal(c.after,n.drives[0].free);a.equal(c.format,'bytes');});
+test('configurable threshold applies to new comparisons',()=>{const n=s();n.drives[0].free-=128*1024**2;a.equal(diff(s(),n).length,0);a.equal(diff(s(),n,64*1024**2).length,1);});
+test('USB status transitions are visible',()=>{const old=s(),n=s();old.usb[0].status='OK';n.usb[0].status='Error';a.equal(diff(old,n)[0].comparison[0].after,'Error');});
+test('settings validation rejects extra keys and out of bounds',()=>{a.ok(validSettings({intervalSeconds:60,diskThresholdMiB:256}));a.equal(validSettings({intervalSeconds:1,diskThresholdMiB:256}),false);a.equal(validSettings({intervalSeconds:60,diskThresholdMiB:256,path:'C:'}),false);});

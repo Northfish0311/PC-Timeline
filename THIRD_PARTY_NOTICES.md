@@ -12,3 +12,7 @@ uses Windows CIM, PnP and registry APIs in read-only mode.
 
 The T logo and demo screenshot are generated specifically for this project.
 No DJI software, module firmware or private user data is included.
+
+Lucide 1.43.0 is bundled as a local browser icon library. Its ISC license and
+Feather-derived icon notices are included in public/vendor/LUCIDE-LICENSE.
+No external icon CDN or network request is required by the UI.

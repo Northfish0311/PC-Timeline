@@ -1,6 +1,6 @@
 {
   "name": "pc-timeline",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Local-first Windows system change timeline",
   "author": "Northfish0311",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.cjs",
     "desktop": "electron .",
-    "check": "node --check server.cjs && node --check public/app.js && node --check desktop/main.cjs",
+    "check": "node --check server.cjs && node --check public/app.js && node --check public/model.js && node --check desktop/main.cjs",
     "test": "node --test test/*.test.cjs",
     "build": "npm run check && npm test && electron-builder --win portable nsis --x64 --publish never"
   },

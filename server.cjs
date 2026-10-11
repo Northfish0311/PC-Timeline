@@ -104,7 +104,7 @@ function start(options = {}) {
       const host = `127.0.0.1:${server.address().port}`;
       if (req.headers.host !== host) return json(403, { error: '只允许本机访问' });
       const url = new URL(req.url, `http://${host}`);
-      if (req.method === 'GET' && url.pathname === '/api/state') return json(200, { ...db, busy, error, recoveryNotice, lastAttempt, nextScanAt: db.paused ? null : new Date(nextScanAt).toISOString(), desktop: !!options.desktop, version: '0.2.0' });
+      if (req.method === 'GET' && url.pathname === '/api/state') return json(200, { ...db, busy, error, recoveryNotice, lastAttempt, nextScanAt: db.paused ? null : new Date(nextScanAt).toISOString(), desktop: !!options.desktop, version: '0.3.0' });
       if (req.method === 'POST') {
         if (req.headers.origin !== `http://${host}` || req.headers['x-timeline-request'] !== '1') return json(403, { error: '来源检查未通过' });
         if (url.pathname === '/api/refresh') { void collect(); return json(202, { ok: true }); }

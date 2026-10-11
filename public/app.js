@@ -3,24 +3,33 @@ const M = TimelineModel;
 const fmt = n => `${(n / 1024 ** 3).toFixed(1)} GB`;
 const clock = t => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const eventKey = e => e.id || `${e.time}|${e.title}`;
-let state = null, loading = false, filter = 'all', limit = 60, appsLimit = 80, settingsDirty = false, saving = false;
+let state = null, loadPromise = null, filter = 'all', limit = 60, appsLimit = 80, settingsDirty = false, saving = false;
+let currentView = 'overview', displayedEvents = null, selectedKey = null, detailCandidates = [], connected = false, stopped = false, mutationEpoch = 0;
+const scrollPositions = {}, pendingActions = new Set();
 let historySignature = '', recentSignature = '', drivesSignature = '', usbSignature = '', appsSignature = '', weekSignature = '';
 let toastTimer;
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 function icon(name) { const e = el('i'); e.dataset.lucide = name; return e; }
-function icons() { lucide.createIcons({ attrs: { 'aria-hidden': 'true' } }); }
+function icons() { if (!document.querySelector('i[data-lucide]')) return; lucide.createIcons({ attrs: { 'aria-hidden': 'true' } }); document.querySelectorAll('svg[data-lucide]').forEach(e => e.removeAttribute('data-lucide')); }
 function empty(text, name = 'inbox') { const e = el('div', 'empty'); e.append(icon(name), el('span', '', text)); return e; }
 function toast(text, failed = false) { clearTimeout(toastTimer); $('toast').textContent = text; $('toast').classList.toggle('error', failed); $('toast').hidden = false; toastTimer = setTimeout(() => { $('toast').hidden = true; }, failed ? 8000 : 4500); }
 function view() {
   const names = { overview: '概览', timeline: '变化时间轴', devices: '设备与软件', privacy: '记录设置' };
   const name = names[location.hash.slice(1)] ? location.hash.slice(1) : 'overview';
+  const changed = name !== currentView;
+  if (changed) { scrollPositions[currentView] = scrollY; currentView = name; if (state && !$('detail-dialog').open) displayedEvents = state.events; }
   document.querySelectorAll('.view').forEach(e => { e.hidden = e.id !== name; });
   document.querySelectorAll('[data-view]').forEach(e => { const active = e.dataset.view === name; e.classList.toggle('active', active); if (active) e.setAttribute('aria-current', 'page'); else e.removeAttribute('aria-current'); });
   $('title').textContent = names[name];
   if (state) render();
   icons();
+  if (changed) requestAnimationFrame(() => window.scrollTo(0, scrollPositions[name] || 0));
+  if (name === 'overview') requestAnimationFrame(() => document.querySelectorAll('.spark').forEach(drawSpark));
 }
-function showDetail(event) {
+function filteredEvents() { return M.filterEvents(displayedEvents || state?.events || [], { type: filter, range: $('range').value, query: $('event-search').value, day: $('day').value }); }
+function showDetail(event, reuseList = false) {
+  if (!reuseList) detailCandidates = currentView === 'timeline' ? filteredEvents() : displayedEvents || state.events;
+  selectedKey = eventKey(event);
   $('detail-title').textContent = event.title;
   $('detail-type').textContent = M.TYPES[event.type] || '系统';
   $('detail-time').textContent = new Date(event.time).toLocaleString('zh-CN');
@@ -33,32 +42,50 @@ function showDetail(event) {
     const values = el('div', 'compare-values');
     const before = el('span'); before.append(el('small', '', '变化前'), el('span', '', c.format === 'bytes' ? fmt(c.before) : c.before));
     const after = el('span'); after.append(el('small', '', '变化后'), el('span', '', c.format === 'bytes' ? fmt(c.after) : c.after));
+    if (c.format === 'bytes' && Number.isFinite(c.before) && Number.isFinite(c.after)) after.classList.add(c.after < c.before ? 'decreased' : c.after > c.before ? 'increased' : 'unchanged');
     values.append(before, icon('arrow-right'), after); row.append(values); $('comparison').append(row);
   }
-  icons(); $('detail-dialog').showModal();
+  const position = detailCandidates.findIndex(e => eventKey(e) === selectedKey);
+  $('detail-position').textContent = position < 0 ? '单条记录' : `${position + 1} / ${detailCandidates.length}`;
+  $('previous-detail').disabled = position <= 0; $('next-detail').disabled = position < 0 || position >= detailCandidates.length - 1;
+  document.querySelectorAll('.event').forEach(e => { e.classList.toggle('selected', e.dataset.key === selectedKey); e.setAttribute('aria-expanded', String(e.dataset.key === selectedKey)); });
+  icons(); if (!$('detail-dialog').open) $('detail-dialog').showModal();
 }
+function navigateDetail(direction) { const index = detailCandidates.findIndex(e => eventKey(e) === selectedKey), next = detailCandidates[index + direction]; if (next) showDetail(next, true); }
 function eventRow(event) {
   const row = el('button', 'event'); row.dataset.type = event.type; row.dataset.key = eventKey(event);
+  row.setAttribute('aria-haspopup', 'dialog'); row.setAttribute('aria-expanded', 'false');
   const badge = el('span', 'badge'); badge.append(icon({ usb: 'usb', disk: 'hard-drive', software: 'app-window', system: 'flag' }[event.type] || 'activity'));
   const body = el('span'); body.append(el('span', 'event-title', event.title), el('div', 'detail', event.detail));
   const t = el('time', '', new Date(event.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })); t.dateTime = event.time;
   row.append(badge, body, t); row.addEventListener('click', () => showDetail(event)); return row;
 }
-function renderHistory() {
-  const list = M.filterEvents(state.events, { type: filter, range: $('range').value, query: $('event-search').value, day: $('day').value });
-  const signature = JSON.stringify([list, limit]);
+function renderHistory(preserveScroll = false) {
+  const list = filteredEvents();
+  const signature = JSON.stringify([list, limit, M.dateKey(new Date())]);
+  const summary = [$('day').value || {all:'全部时间',today:'今天',week:'最近 7 天'}[$('range').value], filter === 'all' ? '' : M.TYPES[filter], $('event-search').value.trim() ? `“${$('event-search').value.trim()}”` : ''].filter(Boolean);
+  $('filter-summary').textContent = summary.join(' · ');
+  $('reset').disabled = filter === 'all' && $('range').value === 'all' && !$('day').value && !$('event-search').value;
+  const displayedKeys = new Set((displayedEvents || []).map(eventKey));
+  const latestMatching = M.filterEvents(state.events, { type: filter, range: $('range').value, query: $('event-search').value, day: $('day').value });
+  const additions = latestMatching.filter(e => !displayedKeys.has(eventKey(e))).length;
+  const globalAdditions = state.events.filter(e => !displayedKeys.has(eventKey(e))).length;
+  const changed = JSON.stringify(state.events) !== JSON.stringify(displayedEvents || []);
+  $('new-events').hidden = !changed;
+  $('new-events').querySelector('span').textContent = additions ? `${additions} 条新记录` : globalAdditions ? '其他分类有新记录' : '记录已更新';
   $('result-count').textContent = `${list.length} 条记录`;
   $('shown-count').textContent = list.length ? `显示 ${Math.min(limit, list.length)} / ${list.length}` : '';
   $('more').hidden = list.length <= limit;
   if (signature === historySignature) return;
-  const anchor = [...$('history').querySelectorAll('.event')].find(e => e.getBoundingClientRect().top >= 0 && e.getBoundingClientRect().top < innerHeight);
+  const anchor = preserveScroll ? [...$('history').querySelectorAll('.event')].find(e => e.getBoundingClientRect().top >= 0 && e.getBoundingClientRect().top < innerHeight) : null;
   const anchorKey = anchor?.dataset.key, anchorTop = anchor?.getBoundingClientRect().top;
   historySignature = signature; $('history').replaceChildren();
-  if (!list.length) { $('history').append(empty(state.events.length ? '这个筛选条件下没有记录。换个日期或关键词试试。' : '首次检查会建立基准，之后的变化会出现在这里。')); return; }
+  if (!list.length) { const box = empty(state.events.length ? '没有符合当前条件的记录' : '尚未记录到变化'); if (!$('reset').disabled) { const clear = el('button', '', '清除筛选'); clear.addEventListener('click', resetFilters); box.append(clear); } $('history').append(box); return; }
+  const dayCounts = new Map(); list.forEach(e => { const key = M.dateKey(e.time); dayCounts.set(key, (dayCounts.get(key) || 0) + 1); });
   let previousDay = '';
   for (const event of list.slice(0, limit)) {
     const day = M.dateKey(event.time);
-    if (day !== previousDay) { const h = el('div', 'day-label', day === M.dateKey(new Date()) ? '今天' : new Date(event.time).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })); h.append(el('span', '', `${list.filter(e => M.dateKey(e.time) === day).length} 条`)); $('history').append(h); previousDay = day; }
+    if (day !== previousDay) { const h = el('div', 'day-label', day === M.dateKey(new Date()) ? '今天' : new Date(event.time).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })); h.append(el('span', '', `${dayCounts.get(day)} 条`)); $('history').append(h); previousDay = day; }
     $('history').append(eventRow(event));
   }
   if (anchorKey) requestAnimationFrame(() => { const next = [...$('history').querySelectorAll('.event')].find(e => e.dataset.key === anchorKey); if (next) window.scrollBy(0, next.getBoundingClientRect().top - anchorTop); });
@@ -78,7 +105,7 @@ function drawSpark(canvas) {
 }
 function renderDrives() {
   const drives = state.snapshot?.drives || [], samples = state.samples || [];
-  const signature = JSON.stringify([drives, samples]); if (signature === drivesSignature) return; drivesSignature = signature;
+  const signature = JSON.stringify([drives, samples, state.settings?.intervalSeconds, Math.floor(Date.now() / 60000)]); if (signature === drivesSignature) return; drivesSignature = signature;
   $('drives').replaceChildren();
   if (!drives.length) { $('drives').append(empty(state.snapshot?.warnings?.includes('disk') ? '本次磁盘读取失败，稍后可以再试。' : '磁盘信息尚未就绪。', 'hard-drive')); return; }
   for (const d of drives) {
@@ -98,9 +125,9 @@ function renderDrives() {
 }
 function renderWeek() {
   const today = state.events.filter(e => M.dateKey(e.time) === M.dateKey(new Date()) && e.type !== 'system');
-  const days = M.weekCounts(state.events); const signature = JSON.stringify([today, days]); if (signature === weekSignature) return; weekSignature = signature;
+  const days = M.weekCounts(state.events, new Date(), state.startedAt); const signature = JSON.stringify([today, days]); if (signature === weekSignature) return; weekSignature = signature;
   $('week').replaceChildren(); const max = Math.max(1, ...days.map(d => d.count));
-  for (const d of days) { const b = el('button', 'day-bar'); b.title = `${d.day}：${d.count} 项变化`; b.setAttribute('aria-label', b.title); const track = el('span', 'bar-track'), fill = el('span', 'bar-fill'); fill.style.height = `${Math.max(3, d.count / max * 88)}px`; track.append(fill); b.append(el('small', '', d.count || '—'), track, el('span', '', d.label)); b.addEventListener('click', () => { $('day').value = d.day; $('range').value = 'all'; limit = 60; location.hash = 'timeline'; renderHistory(); icons(); }); $('week').append(b); }
+  for (const d of days) { const b = el('button', `day-bar${d.tracked ? '' : ' untracked'}`); b.title = d.tracked ? `${d.day}：${d.count} 项已记录变化` : `${d.day}：尚未开始记录`; b.disabled = !d.tracked; b.setAttribute('aria-label', b.title); const track = el('span', 'bar-track'), fill = el('span', 'bar-fill'); fill.style.height = d.tracked ? `${Math.max(3, d.count / max * 88)}px` : '0px'; track.append(fill); b.append(el('small', '', d.tracked ? d.count : '—'), track, el('span', '', d.label)); b.addEventListener('click', () => { resetFilters(false); $('day').value = d.day; scrollPositions.timeline = 0; displayedEvents = state.events; location.hash = 'timeline'; renderHistory(); icons(); }); $('week').append(b); }
   $('breakdown').replaceChildren();
   for (const [type, ico] of [['usb', 'usb'], ['software', 'app-window'], ['disk', 'hard-drive']]) { const r = el('div', 'breakdown-row'), label = el('span'); label.append(icon(ico), el('span', '', `今日${M.TYPES[type]}变化`)); r.append(label, el('strong', '', today.filter(e => e.type === type).length)); $('breakdown').append(r); }
 }
@@ -118,43 +145,91 @@ function renderInventory() {
 }
 function render() {
   const s = state.snapshot, today = state.events.filter(e => M.dateKey(e.time) === M.dateKey(new Date()) && e.type !== 'system');
+  $('date').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
   $('count').textContent = s ? today.length : '—'; $('count-detail').textContent = s ? '已记录的设备、软件与磁盘变化' : '等待建立基准'; $('nav-count').textContent = state.events.length;
   $('usb-count').textContent = s ? s.usb.length : '—'; $('apps-count').textContent = s ? s.software.length : '—'; $('scan').textContent = s ? clock(s.time) : '等待采集';
   $('status').textContent = state.busy ? '正在采集…' : state.paused ? '自动记录已暂停' : state.error ? '上次采集未完成' : `每 ${state.settings?.intervalSeconds || 60} 秒检查`;
   const pauseLabel = state.paused ? '继续记录' : '暂停记录';
   if ($('pause').textContent !== pauseLabel) { $('pause').replaceChildren(icon(state.paused ? 'play' : 'pause'), el('span', '', pauseLabel)); }
-  $('refresh').disabled = !!state.busy; $('refresh').querySelector('span').textContent = state.busy ? '检查中' : '立即检查'; $('export').disabled = !s;
+  $('refresh').querySelector('span').textContent = state.busy || pendingActions.has('refresh') ? '检查中' : connected ? '立即检查' : '重新连接'; $('export').disabled = !s;
   const warnings = [state.error, state.recoveryNotice, ...(s?.warnings || []).map(x => `${{ disk: '磁盘', usb: 'USB', software: '软件' }[x]}读取失败，本次跳过该类比较。`)].filter(Boolean); $('notice').hidden = !warnings.length; $('notice').textContent = warnings.join(' ');
   $('side-status').textContent = warnings.length ? '采集需要留意' : state.paused ? '记录已暂停' : state.busy ? '正在检查' : '正在记录'; $('side-dot').className = `status-dot${warnings.length ? ' error' : state.paused ? ' paused' : ''}`;
-  renderDrives(); renderWeek(); renderHistory(); renderInventory();
-  const recent = state.events.slice(0, 5), signature = JSON.stringify(recent); if (signature !== recentSignature) { recentSignature = signature; $('recent').replaceChildren(); if (!recent.length) $('recent').append(empty('首次检查建立基准后，新的变化会出现在这里。')); for (const e of recent) $('recent').append(eventRow(e)); }
-  $('footer').textContent = state.paused ? '记录已暂停 · 历史仍保留' : s ? `最近检查 ${clock(s.time)}` : '准备建立基准'; $('version').textContent = state.version || '0.2.0';
+  if (currentView === 'overview') {
+    renderDrives(); renderWeek();
+    const recent = state.events.slice(0, 5), signature = JSON.stringify(recent); if (signature !== recentSignature) { recentSignature = signature; $('recent').replaceChildren(); if (!recent.length) $('recent').append(empty('尚未记录到变化')); for (const e of recent) $('recent').append(eventRow(e)); }
+  } else if (currentView === 'timeline') renderHistory(true);
+  else if (currentView === 'devices') renderInventory();
+  $('footer').textContent = state.paused ? '记录已暂停 · 历史仍保留' : s ? `最近检查 ${new Date(s.time).toLocaleString('zh-CN')}` : '准备建立基准'; $('version').textContent = state.version || '0.3.0';
   $('stop').querySelector('span').textContent = state.desktop ? '退出软件' : '停止本地服务';
   $('storage-help').textContent = state.desktop ? '历史保存在 %APPDATA%\\PC Timeline\\data。安装版和便携版共用当前用户的记录；清除前先退出软件，再删除该目录。' : '历史保存在项目的 data/timeline.json。清除前先停止服务，再删除 data 目录；该目录不加入 Git。';
   $('retention-help').textContent = '最多保存 2,000 条事件和 1,440 个磁盘采样点，达到上限后移除最早记录。更新软件不会主动清空历史。';
   $('started-at').textContent = state.startedAt ? new Date(state.startedAt).toLocaleString('zh-CN') : '尚未建立基准'; $('saved-count').textContent = `${state.events.length} / 2,000`; $('samples-count').textContent = `${state.samples?.length || 0} / 1,440`;
-  if (!settingsDirty && !saving) { for (const [id, value] of [['interval', state.settings?.intervalSeconds || 60], ['threshold', state.settings?.diskThresholdMiB || 256]]) { if (![...$(id).options].some(o => +o.value === value)) $(id).append(new Option(`${value}${id === 'interval' ? ' 秒' : ' MiB'}`, value)); $(id).value = value; } }
+  if (currentView === 'privacy') syncSettings();
+  renderControls();
   icons();
 }
-async function load() {
-  if (loading) return; loading = true;
-  try { const response = await fetch('/api/state'); if (!response.ok) throw Error(); state = await response.json(); render(); }
-  catch { $('notice').hidden = false; $('notice').textContent = '本地服务暂时无法连接。当前显示的是之前的数据，重新打开软件后可继续。'; $('side-status').textContent = '连接中断'; $('side-dot').className = 'status-dot error'; }
-  finally { loading = false; }
+function syncSettings(force = false) {
+  if (force || !settingsDirty && !saving) { for (const [id, value] of [['interval', state?.settings?.intervalSeconds || 60], ['threshold', state?.settings?.diskThresholdMiB || 256]]) { if (![...$(id).options].some(o => +o.value === value)) $(id).append(new Option(`${value}${id === 'interval' ? ' 秒' : ' MiB'}`, value)); $(id).value = value; } }
+  settingsDirty = !!state && (+$('interval').value !== state.settings.intervalSeconds || +$('threshold').value !== state.settings.diskThresholdMiB);
+  $('settings-state').textContent = saving ? '正在保存…' : settingsDirty ? '有未保存更改' : '已保存';
+  $('settings-state').classList.toggle('dirty', settingsDirty);
+  $('interval').disabled = saving; $('threshold').disabled = saving;
+  $('save-settings').disabled = !connected || saving || !settingsDirty;
+  $('undo-settings').disabled = saving || !settingsDirty;
 }
-async function post(name, body) { const r = await fetch(`/api/${name}`, { method: 'POST', headers: { 'X-Timeline-Request': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }); const result = await r.json(); if (!r.ok) throw Error(result.error || '操作未完成'); return result; }
-async function action(name) { $(name).disabled = true; try { await post(name); await load(); } catch (e) { toast(e.message || '操作未完成，请稍后重试。', true); } finally { $(name).disabled = name === 'refresh' && !!state?.busy; } }
+function renderControls() {
+  $('pause').disabled = !connected || !state || pendingActions.has('pause') || stopped;
+  $('refresh').disabled = pendingActions.has('refresh') || connected && !!state?.busy || stopped;
+  if (currentView === 'privacy') syncSettings();
+}
+async function load() {
+  if (stopped) return; if (loadPromise) return loadPromise;
+  const epoch = mutationEpoch; let repeat = false;
+  const task = (async () => {
+    try {
+      const response = await fetch('/api/state', { signal: AbortSignal.timeout(8000) }); if (!response.ok) throw Error(); const data = await response.json();
+      if (epoch !== mutationEpoch) { repeat = true; return; }
+      state = data; connected = true;
+      if (displayedEvents === null || currentView !== 'timeline' && !$('detail-dialog').open) displayedEvents = data.events;
+      render();
+    } catch {
+      if (epoch !== mutationEpoch) { repeat = true; return; }
+      connected = false; $('notice').hidden = false; $('notice').textContent = '本地服务暂时无法连接，当前显示的是之前的数据。'; $('side-status').textContent = '连接中断'; $('side-dot').className = 'status-dot error'; $('refresh').querySelector('span').textContent = '重新连接'; renderControls();
+    }
+  })();
+  loadPromise = task;
+  try { await task; } finally { if (loadPromise === task) loadPromise = null; if (repeat && !stopped) queueMicrotask(() => void load()); }
+}
+async function post(name, body) {
+  let r; try { r = await fetch(`/api/${name}`, { method: 'POST', signal: AbortSignal.timeout(10000), headers: { 'X-Timeline-Request': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }); }
+  catch { throw Error('本地服务无法连接，稍后重试或重新打开软件。'); }
+  let result; try { result = await r.json(); } catch { throw Error('本地服务返回了无法读取的内容，请重新打开软件。'); }
+  if (!r.ok) throw Error(result.error || '操作未完成，请稍后重试。'); return result;
+}
+async function action(name) {
+  if (pendingActions.has(name) || stopped) return;
+  pendingActions.add(name); mutationEpoch++; renderControls();
+  try { if (name === 'refresh' && !connected) await load(); else { const result = await post(name); mutationEpoch++; if (state && name === 'pause') { state.paused = result.paused; render(); } await load(); } }
+  catch (e) { toast(e.message, true); }
+  finally { pendingActions.delete(name); renderControls(); }
+}
+function resetFilters(update = true) { filter = 'all'; limit = 60; $('range').value = 'all'; $('day').value = ''; $('event-search').value = ''; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all')); if (update && state) { renderHistory(); icons(); } }
 document.querySelectorAll('[data-view]').forEach(e => e.addEventListener('click', () => { location.hash = e.dataset.view; }));
 document.querySelectorAll('[data-filter]').forEach(e => e.addEventListener('click', () => { filter = e.dataset.filter; limit = 60; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b === e)); if (state) { renderHistory(); icons(); } }));
-for (const id of ['event-search', 'range', 'day']) $(id).addEventListener(id === 'event-search' ? 'input' : 'change', () => { limit = 60; if (state) { renderHistory(); icons(); } });
-$('reset').addEventListener('click', () => { filter = 'all'; limit = 60; $('range').value = 'all'; $('day').value = ''; $('event-search').value = ''; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all')); if (state) { renderHistory(); icons(); } });
+for (const id of ['event-search', 'range', 'day']) $(id).addEventListener(id === 'event-search' ? 'input' : 'change', () => { if (id === 'range') $('day').value = ''; if (id === 'day' && $('day').value) $('range').value = 'all'; limit = 60; if (state) { renderHistory(); icons(); } });
+$('reset').addEventListener('click', () => resetFilters());
+$('new-events').addEventListener('click', () => { displayedEvents = state.events; limit = 60; renderHistory(); icons(); window.scrollTo(0, 0); });
 $('more').addEventListener('click', () => { limit += 60; renderHistory(); icons(); });
 $('search').addEventListener('input', () => { appsLimit = 80; if (state) { renderInventory(); icons(); } });
 $('apps-more').addEventListener('click', () => { appsLimit += 80; renderInventory(); icons(); });
 $('pause').addEventListener('click', () => action('pause')); $('refresh').addEventListener('click', () => action('refresh'));
 $('close-detail').addEventListener('click', () => $('detail-dialog').close()); $('detail-dialog').addEventListener('click', e => { if (e.target === $('detail-dialog')) { const r = e.target.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) e.target.close(); } });
-for (const id of ['interval', 'threshold']) $(id).addEventListener('change', () => { settingsDirty = true; });
-$('settings-form').addEventListener('submit', async e => { e.preventDefault(); if (saving) return; saving = true; $('save-settings').disabled = true; try { await post('settings', { intervalSeconds: +$('interval').value, diskThresholdMiB: +$('threshold').value }); settingsDirty = false; toast('设置已保存，下次自动检查按新间隔进行。'); await load(); } catch (error) { toast(error.message, true); } finally { saving = false; $('save-settings').disabled = false; } });
+$('detail-dialog').addEventListener('close', () => { selectedKey = null; document.querySelectorAll('.event').forEach(e => { e.classList.remove('selected'); e.setAttribute('aria-expanded', 'false'); }); if (state && currentView !== 'timeline') { displayedEvents = state.events; render(); } });
+$('previous-detail').addEventListener('click', () => navigateDetail(-1)); $('next-detail').addEventListener('click', () => navigateDetail(1));
+$('detail-dialog').addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); navigateDetail(e.key === 'ArrowLeft' ? -1 : 1); } });
+for (const id of ['interval', 'threshold']) $(id).addEventListener('change', () => { settingsDirty = true; syncSettings(); });
+$('undo-settings').addEventListener('click', () => { settingsDirty = false; syncSettings(true); });
+$('settings-form').addEventListener('submit', async e => { e.preventDefault(); if (saving || !settingsDirty || !connected) return; saving = true; mutationEpoch++; syncSettings(); try { const result = await post('settings', { intervalSeconds: +$('interval').value, diskThresholdMiB: +$('threshold').value }); mutationEpoch++; state.settings = result.settings; settingsDirty = false; syncSettings(true); toast('设置已保存，下次自动检查按新间隔进行。'); await load(); } catch (error) { toast(error.message, true); } finally { saving = false; syncSettings(); } });
 $('export').addEventListener('click', () => {
   if (!state?.snapshot) return; const c = document.createElement('canvas'); c.width = 1080; c.height = 720; const x = c.getContext('2d'), today = state.events.filter(e => M.dateKey(e.time) === M.dateKey(new Date()) && e.type !== 'system');
   x.fillStyle = '#f6f8fa'; x.fillRect(0, 0, 1080, 720); x.fillStyle = '#2e4a3e'; x.font = 'bold 46px "Microsoft YaHei",sans-serif'; x.fillText('今天，电脑发生了什么？', 72, 106); x.fillStyle = '#8a9ca6'; x.font = '24px "Microsoft YaHei",sans-serif'; x.fillText(new Date().toLocaleDateString('zh-CN'), 72, 162); x.fillStyle = '#397e5b'; x.font = 'bold 90px sans-serif'; x.fillText(String(today.length), 72, 290); x.font = '24px "Microsoft YaHei",sans-serif'; x.fillText('项已记录变化', 72, 340);
@@ -162,8 +237,8 @@ $('export').addEventListener('click', () => {
   state.snapshot.drives.slice(0, 3).forEach((d, i) => { x.fillStyle = '#617987'; x.font = '23px "Microsoft YaHei",sans-serif'; x.fillText(`${d.id}    可用 ${fmt(d.free)} / ${fmt(d.total)}`, 72, 462 + i * 45); }); x.fillStyle = '#97a5ae'; x.font = '19px "Microsoft YaHei",sans-serif'; x.fillText('电脑时光机 · 仅统计运行后记录 · 不含名称和私人路径', 72, 664);
   c.toBlob(blob => { if (!blob) { toast('日报图片生成失败。', true); return; } const url = URL.createObjectURL(blob), a = el('a'); a.href = url; a.download = `PC-Timeline-${M.dateKey(new Date())}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); });
 });
-$('stop').addEventListener('click', async () => { if (!confirm(state?.desktop ? '退出软件后不再记录。确定退出？' : '停止后不再记录。下次双击 Start.cmd 重新打开。确定停止？')) return; try { await post('stop'); clearInterval(poll); $('refresh').disabled = true; $('pause').disabled = true; $('notice').hidden = false; $('notice').textContent = '本地服务已停止。'; } catch { toast('停止未完成，可直接关闭软件窗口。', true); } });
+$('stop').addEventListener('click', async () => { if (!confirm(state?.desktop ? '退出软件后不再记录。确定退出？' : '停止后不再记录。下次双击 Start.cmd 重新打开。确定停止？')) return; try { await post('stop'); stopped = true; mutationEpoch++; clearInterval(poll); renderControls(); $('notice').hidden = false; $('notice').textContent = '本地服务已停止。'; } catch { toast('停止未完成，可直接关闭软件窗口。', true); } });
 window.addEventListener('hashchange', view); window.addEventListener('resize', () => { document.querySelectorAll('.spark').forEach(drawSpark); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { $('date').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }); void load(); } });
 $('date').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
-view(); void load(); const poll = setInterval(() => { if (!document.hidden) void load(); }, 3000);
+view(); renderControls(); void load(); const poll = setInterval(() => { if (!document.hidden) void load(); }, 3000);

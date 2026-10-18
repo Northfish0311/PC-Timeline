@@ -17,9 +17,9 @@
   <div id="notice" role="status" hidden></div><div id="toast" role="status" hidden></div>
   <section id="overview" class="view">
     <div class="stats">
-      <div><span class="stat-label"><i data-lucide="activity"></i>今日变化</span><strong id="count">—</strong><small id="count-detail">等待建立基准</small></div>
-      <div><span class="stat-label"><i data-lucide="usb"></i>当前 USB</span><strong id="usb-count">—</strong><small>设备 / 接口登记</small></div>
-      <div><span class="stat-label"><i data-lucide="app-window"></i>软件登记</span><strong id="apps-count">—</strong><small>当前桌面软件</small></div>
+      <div><button id="today-link" class="stat-link" title="查看今天的变化" disabled><span class="stat-label"><i data-lucide="activity"></i>今日变化<i class="stat-jump" data-lucide="arrow-up-right"></i></span><strong id="count">—</strong><small id="count-detail">等待建立基准</small></button></div>
+      <div><button id="usb-link" class="stat-link" title="查看 USB 设备" disabled><span class="stat-label"><i data-lucide="usb"></i>当前 USB<i class="stat-jump" data-lucide="arrow-up-right"></i></span><strong id="usb-count">—</strong><small>设备 / 接口登记</small></button></div>
+      <div><button id="software-link" class="stat-link" title="查看软件登记" disabled><span class="stat-label"><i data-lucide="app-window"></i>软件登记<i class="stat-jump" data-lucide="arrow-up-right"></i></span><strong id="apps-count">—</strong><small>当前桌面软件</small></button></div>
       <div><span class="stat-label"><i data-lucide="clock-3"></i>最近采集</span><strong id="scan" class="time">等待采集</strong><small id="status">正在读取系统信息</small></div>
     </div>
     <div class="section-head"><h2>磁盘空间</h2><span id="disk-span">最近 24 小时</span></div><div id="drives" class="drive-grid"></div>
@@ -29,13 +29,15 @@
     </div>
   </section>
   <section id="timeline" class="view" hidden>
-    <div class="timeline-tools"><div class="toolbar"><label class="search-field"><i data-lucide="search"></i><input id="event-search" type="search" placeholder="搜索变化" aria-label="搜索变化"></label><select id="range" aria-label="时间范围"><option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option></select><input id="day" type="date" aria-label="指定日期"><button id="reset" class="icon-button" title="重置筛选" aria-label="重置筛选"><i data-lucide="rotate-ccw"></i></button></div><div class="filter-feedback"><span id="filter-summary">全部记录</span><button id="new-events" hidden><i data-lucide="arrow-up"></i><span>有新记录</span></button></div></div>
-    <div class="timeline-subhead"><div class="filters" role="group" aria-label="事件类型"><button data-filter="all" class="active">全部</button><button data-filter="disk">磁盘</button><button data-filter="usb">USB</button><button data-filter="software">软件</button><button data-filter="system">系统</button></div><span id="result-count"></span></div>
+    <div class="timeline-tools"><div class="toolbar"><label class="search-field"><i data-lucide="search"></i><input id="event-search" type="search" placeholder="搜索变化" aria-label="搜索变化" maxlength="160"></label><select id="range" aria-label="时间范围"><option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option></select><input id="day" type="date" aria-label="指定日期"><button id="reset" class="icon-button" title="重置筛选" aria-label="重置筛选"><i data-lucide="rotate-ccw"></i></button></div><div class="filter-feedback"><span id="filter-summary">全部记录</span><button id="new-events" hidden><i data-lucide="arrow-up"></i><span>有新记录</span></button></div>
+    <div class="timeline-subhead"><div class="filters" role="group" aria-label="事件类型"><button data-filter="all" class="active" aria-pressed="true">全部<small>0</small></button><button data-filter="disk" aria-pressed="false">磁盘<small>0</small></button><button data-filter="usb" aria-pressed="false">USB<small>0</small></button><button data-filter="software" aria-pressed="false">软件<small>0</small></button><button data-filter="system" aria-pressed="false">系统<small>0</small></button></div></div></div>
+    <div class="timeline-results"><span id="result-count" role="status"></span><div class="density-controls" role="group" aria-label="列表密度"><button class="icon-button" data-density="comfortable" title="舒适列表" aria-label="舒适列表" aria-pressed="true"><i data-lucide="rows-3"></i></button><button class="icon-button" data-density="compact" title="紧凑列表" aria-label="紧凑列表" aria-pressed="false"><i data-lucide="list"></i></button></div></div>
     <div id="history" class="feed"></div><div class="load-row"><button id="more" hidden>显示更多</button><span id="shown-count"></span></div>
   </section>
   <section id="devices" class="view" hidden>
-    <div class="section-head"><h2>当前 USB 设备</h2><span id="usb-info"></span></div><div id="usb-list" class="inventory"></div>
-    <div class="section-head"><h2>软件登记列表</h2><label class="search-field compact"><i data-lucide="search"></i><input id="search" type="search" placeholder="搜索软件" aria-label="搜索软件"></label></div><div id="apps-list" class="inventory"></div><div class="load-row"><button id="apps-more" hidden>显示更多软件</button><span id="apps-shown"></span></div>
+    <div class="inventory-toolbar"><div class="inventory-tabs" role="tablist" aria-label="登记类别"><button id="usb-tab" role="tab" aria-selected="true" aria-controls="inventory-panel" data-inventory="usb"><i data-lucide="usb"></i>USB 设备<span id="usb-total">—</span></button><button id="software-tab" role="tab" aria-selected="false" aria-controls="inventory-panel" data-inventory="software" tabindex="-1"><i data-lucide="app-window"></i>软件<span id="software-total">—</span></button></div><label class="search-field"><i data-lucide="search"></i><input id="search" type="search" placeholder="搜索设备名称或类别" aria-label="搜索 USB 设备" maxlength="160"></label></div>
+    <div class="inventory-heading"><div><h2 id="inventory-title">当前 USB 设备</h2><p id="inventory-note">接口登记数量不等于物理设备数量。</p></div><span id="inventory-summary" role="status"></span></div>
+    <div id="inventory-panel" role="tabpanel" aria-labelledby="usb-tab"><div id="usb-list" class="inventory"></div><div id="apps-list" class="inventory" hidden></div><div class="load-row"><button id="apps-more" hidden>显示更多</button><span id="apps-shown"></span></div></div>
   </section>
   <section id="privacy" class="view" hidden>
     <div class="section-head"><h2>采集偏好</h2><span>仅影响本软件的记录</span></div>
@@ -44,7 +46,7 @@
     <div class="record-meta"><span>开始记录</span><strong id="started-at">尚未建立基准</strong><span>保存的事件</span><strong id="saved-count">0 / 2,000</strong><span>趋势采样点</span><strong id="samples-count">0 / 1,440</strong></div>
     <details class="privacy-details"><summary>数据范围与记录边界</summary><p>读取磁盘容量、USB 名称与状态、软件登记与版本。USB 实例标识只保存为散列，不保存原始序列号。软件和设备名称仍可能包含个人信息，请勿公开历史记录。</p><p>从第一次启动后开始记录，不能恢复之前历史。两次检查之间的短暂插拔可能漏记。USB 复合设备包含多个接口，数量不等于物理设备数。软件列表来自卸载注册表，不涵盖所有便携应用和商店应用。磁盘变化不能定位到具体文件，也不能证明某个软件导致了空间变化。</p><p>暂停后停止自动采集，仍可手动检查。关闭软件后不记录，不默认开机启动。趋势只使用实际采样点，缺失时段不会补写数据。</p></details>
   </section>
-  <footer><span id="footer">准备建立基准</span><button id="stop"><i data-lucide="power"></i><span>停止本地服务</span></button><span>电脑时光机 <span id="version">0.3.0</span></span></footer>
+  <footer><span id="footer">准备建立基准</span><button id="stop"><i data-lucide="power"></i><span>停止本地服务</span></button><span>电脑时光机 <span id="version">0.4.0</span></span></footer>
 </main>
 <dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-heading"><span id="detail-type"></span><button id="close-detail" class="icon-button" title="关闭" aria-label="关闭详情"><i data-lucide="x"></i></button></div><h2 id="detail-title"></h2><time id="detail-time"></time><p id="detail-text"></p><div id="comparison"></div><div class="detail-navigation"><span id="detail-position"></span><div><button id="previous-detail" class="icon-button" title="上一条" aria-label="上一条记录"><i data-lucide="chevron-left"></i></button><button id="next-detail" class="icon-button" title="下一条" aria-label="下一条记录"><i data-lucide="chevron-right"></i></button></div></div></dialog>
 <script src="/vendor/lucide.min.js"></script><script src="/model.js"></script><script src="/app.js"></script>

@@ -1,12 +1,15 @@
 {
   "name": "pc-timeline",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Local-first Windows system change timeline",
   "author": "Northfish0311",
   "license": "MIT",
   "main": "desktop/main.cjs",
-  "repository": { "type": "git", "url": "https://github.com/Northfish0311/PC-Timeline.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Northfish0311/PC-Timeline.git"
+  },
   "scripts": {
     "start": "node server.cjs",
     "desktop": "electron .",
@@ -14,17 +17,51 @@
     "test": "node --test test/*.test.cjs",
     "build": "npm run check && npm test && electron-builder --win portable nsis --x64 --publish never"
   },
-  "engines": { "node": ">=20" },
-  "devDependencies": { "electron": "43.4.0", "electron-builder": "26.15.3" },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3"
+  },
   "build": {
     "appId": "com.northfish0311.pc.timeline",
     "productName": "PC Timeline",
     "asar": true,
-    "files": ["desktop/**/*", "public/**/*", "server.cjs", "package.json", "LICENSE"],
-    "extraResources": [{ "from": "collector.ps1", "to": "collector.ps1" }],
-    "directories": { "output": "dist" },
-    "win": { "target": ["portable", "nsis"], "icon": "build/icon.ico" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "shortcutName": "电脑时光机", "artifactName": "PC-Timeline-Setup-${version}-${arch}.${ext}" },
-    "portable": { "artifactName": "PC-Timeline-Portable-${version}-${arch}.${ext}" }
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "server.cjs",
+      "package.json",
+      "LICENSE"
+    ],
+    "extraResources": [
+      {
+        "from": "collector.ps1",
+        "to": "collector.ps1"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "电脑时光机",
+      "artifactName": "PC-Timeline-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "PC-Timeline-Portable-${version}-${arch}.${ext}"
+    }
   }
 }
